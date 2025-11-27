@@ -1,0 +1,190 @@
+# 📝 Apidog Test Scenario Template
+# Human-readable format for creating test scenarios
+# Step details are automatically looked up from the original Apidog JSON file
+
+# Basic Information
+name: "Sample User Journey"
+description: "Example scenario for a generic user flow"
+priority: 2  # 1=P0, 2=P1, 3=P2, 4=P3
+tags: []
+
+# Source Apidog file (to lookup API definitions)
+source_apidog: "apidog/demo/Example API.apidog.json"
+
+# Optional: Source for linked test cases (if different from source_apidog)
+# source_test_cases: "apidog/demo/Example API.apidog.json"
+
+# Test Options
+options:
+  environment_id: 1000000  # The environment to run this test in
+  iteration_count: 1       # Number of times to run the test
+  thread_count: 1          # Number of parallel threads
+  on_error: "ignore"       # Options: "ignore", "end", "continue"
+  delay_item: 0            # Delay between steps (milliseconds)
+  save_report_detail: "all"  # Options: "all", "failed", "none"
+
+# Test Data Sets
+datasets:
+  - name: "Data 1"
+    # Optional: Specify IDs to maintain consistency when syncing with Apidog
+    # id: 10000001              # Dataset ID (optional)
+    # data_list_id: 10000002    # Data list ID (optional)
+    data: |
+      Dataset Name,email,password
+      Dataset-1,demo-user@example.com,DemoPass123!
+
+# Test Steps
+# Only specify step names - all other details are looked up from source_apidog file
+steps:
+  # Option 1: Link to existing test case (reuse 00-Login or other test case)
+  - number: 1
+    name: "Re-use Login"
+    type: "link"
+    description: "Reuse existing login case to get JWT tokens"
+    link_to: "00-Login"  # Reference to existing test case name
+    # Optional: Specify step number to link (only copy that specific step)
+    # link_step: 1  # or link_step_number: 1
+    # If link_step is not specified, all steps from the linked test case will be copied
+  
+  # Option 1b: Reference test case (testCaseRef) - creates a reference to another test case
+  # Note: Use "link" to inline steps, use "testCaseRef" to reference as a sub-test case
+  # - number: 1
+  #   type: "testCaseRef"  # or "test_case_ref"
+  #   name: "00 - Login Admin"  # Optional: display name (defaults to referenced test case name)
+  #   ref_name: "00 - Login Admin"  # Reference by test case name (preferred)
+  #   # Alternative: reference by test case ID
+  #   # ref_id: 1516012  # Reference by test case ID
+  #   # Optional: disable this step
+  #   # disable: false
+  #   # Optional: custom parameters
+  #   # parameters: {}
+  
+  # Option 2: Define HTTP API call
+  - number: 2
+    name: "Get Profile"  # Must match API name in source file
+    type: "http"
+    # Optional: Specify folder path if multiple APIs have the same name
+    # folder: "User Profile"  # or "Root/Authentication" for nested folders
+    # Optional: Specify API path to disambiguate when multiple APIs have same name
+    # path: "/api/v1/chat/completions"  # Use this when same API name exists with different paths (e.g., /api/v1/chat/completions vs /v1/chat/completions)
+    # Optional: Specify HTTP method to further disambiguate (if path alone is not enough)
+    # method: "POST"  # GET, POST, PUT, DELETE, PATCH, etc.
+    # Optional: Add authorization (for APIs requiring JWT token)
+    auth:
+      type: "bearer"
+      token: "{{$.1.response.body.tokens.accessToken}}"  # Use token from login step
+    # Optional: Override request body (for JSON, application/x-www-form-urlencoded, etc.)
+    # request_body_override:
+    #   data: |
+    #     {
+    #         "username": "{{email}}",
+    #         "password": "{{password}}"
+    #     }
+    # Optional: Override form data (for multipart/form-data requests)
+    # request_form_data_override:
+    #   - name: "file"           # Field name
+    #     type: "file"            # Field type: "file" or "string"
+    #     value: "path/to/file"  # File path or string value
+    #     enable: true            # Optional: default is true
+    #   - name: "metadata"
+    #     type: "string"
+    #     value: '{"key": "value"}'
+    # Optional: Add custom preProcessors (customScript, etc.) - runs before request
+    # pre_processors:
+    #   - type: "customScript"                  # Required: preProcessor type
+    #     data: |                                 # Required: script code or data
+    #       // Modify request before sending
+    #       pm.request.headers.add({
+    #         key: "X-Custom-Header",
+    #         value: "custom-value"
+    #       });
+    #     default_enable: false                   # Optional: default is false
+    #     enable: true                           # Optional: default is true
+    # Optional: Override query parameters
+    # query_params_override:
+    #   - name: "email"
+    #     value: "{{email}}"
+    #   - name: "limit"
+    #     value: "10"
+    # Optional: Override path parameters
+    # path_params_override:
+    #   - name: "deviceId"
+    #     value: "{{$.3.response.body.deviceId}}"
+    #   - name: "userId"
+    #     value: "{{user_id}}"
+    # Optional: Override cookie parameters
+    # cookie_params_override:
+    #   - name: "device_token"
+    #     value: "{{device_token}}"
+    #   - name: "session_id"
+    #     value: "{{session_id}}"
+    # Optional: Override header parameters (custom headers)
+    # header_params_override:
+    #   - name: "X-Custom-Header"
+    #     value: "custom-value"
+    #   - name: "X-Request-ID"
+    #     value: "{{request_id}}"
+    #   - name: "X-API-Version"
+    #     value: "v2"
+    # Optional: Override user agent for this step (overrides global user_agent)
+    # user_agent: "CustomUserAgent/2.0"
+    # Optional: Disable response validation (sets responseId to 0)
+    # disable_response_validation: true  # When true, responseId will be 0 after conversion
+    # Alternative: use response_validation: false
+    # response_validation: false  # When false, responseId will be 0 after conversion
+    # Optional: Add assertions to verify response (Apidog postProcessors format)
+    # assertions:
+    #   - name: "Check user ID exists"           # Optional: assertion name
+    #     subject: "responseJson"                # Optional: default is responseJson
+    #     path: "$.id"                           # Required: JSONPath to field
+    #     comparison: "exists"                   # Required: equal, notEqual, contains, exists, etc.
+    #     value: "true"                          # Required: expected value
+    # Optional: Add custom postProcessors (customScript, etc.)
+    # post_processors:
+    #   - type: "customScript"                  # Required: postProcessor type
+    #     data: |                                 # Required: script code or data
+    #       // Get the base URL from environment
+    #       const baseUrl = pm.environment.get('BASE_URL');
+    #       // ... your script code here ...
+    #     default_enable: false                   # Optional: default is false
+    #     enable: true                           # Optional: default is true
+    #   - type: "assertion"                      # Alternative: use assertion type
+    #     data:
+    #       name: "Check user ID exists"
+    #       subject: "responseJson"
+    #       path: "$.id"
+    #       comparison: "exists"
+    #       value: "true"
+  
+  # Option 3: Conditional step (only use if truly needed for 2 valid response cases)
+  - number: 3
+    type: "if"
+    condition:
+      variable: "{{$.2.response.body.isActive}}"
+      operator: "equal"  # Options: equal, not_equal, greater, less, contains, etc.
+      value: "true"
+    children:
+      - number: 4
+        name: "Handle Active User"
+        type: "http"
+        auth:
+          type: "bearer"
+          token: "{{$.1.response.body.tokens.accessToken}}"
+  
+  # Option 4: Add delay/wait step
+  - number: 5
+    type: "delay"  # or "wait"
+    timeout: 5000  # Wait time in milliseconds (5000 = 5 seconds)
+    # Alternative: use "duration" instead of "timeout"
+    # duration: 5000
+
+  # Option 5: Add script step (custom JavaScript)
+  - number: 6
+    type: "script"
+    name: "Set Variables"  # Optional: step name
+    data: |
+      pm.variables.set("login_user", "{{$.3.request.body.email}}");
+      pm.variables.set("login_password", "{{$.3.request.body.password}}");
+    # Optional: enable/disable
+    # enable: true
+    # default_enable: true

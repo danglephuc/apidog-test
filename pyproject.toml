@@ -1,0 +1,44 @@
+[project]
+name = "apidog-test"
+version = "1.0.0"
+description = "CLI tool to initialize Apidog test infrastructure with AI agent integration"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Phuc Dang", email = "danglephuc@gmail.com"}
+]
+keywords = ["apidog", "testing", "cli", "openapi", "cursor", "copilot"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Code Generators",
+]
+
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "httpx>=0.25.0",
+    "readchar>=4.0.0",
+    "platformdirs>=4.0.0",
+]
+
+[project.scripts]
+apidog-test = "apidog_test:main"
+
+[project.urls]
+Homepage = "https://github.com/danglephuc/apidog-test"
+Repository = "https://github.com/danglephuc/apidog-test"
+Issues = "https://github.com/danglephuc/apidog-test/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/apidog_test"]

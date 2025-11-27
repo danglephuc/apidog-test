@@ -1,0 +1,28 @@
+{
+  "steps": [],
+  "id": 0,
+  "name": "",
+  "tags": [],
+  "options": {
+    "environmentId": 0,
+    "useDataSetId": 0,
+    "iterationCount": 1,
+    "threadCount": 1,
+    "runnerId": 0,
+    "onError": "ignore",
+    "delayItem": 0,
+    "saveReportDetail": "all",
+    "saveVariables": true,
+    "readGlobalCookie": false,
+    "saveGlobalCookie": false
+  },
+  "priority": 2,
+  "ordering": 10,
+  "description": "",
+  "preProcessors": [],
+  "postProcessors": [],
+  "children": [],
+  "performanceTestOptions": {},
+  "apiTestDataSets": []
+}
+
