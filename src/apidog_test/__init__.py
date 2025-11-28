@@ -28,6 +28,8 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
+from rich.text import Text
+from rich.markup import escape
 
 __version__ = "1.0.0"
 
@@ -306,8 +308,17 @@ def _select_release_asset(release_data: Dict[str, Any]) -> Dict[str, Any]:
             "size": preferred.get("size", 0),
             "source": "asset",
         }
+    
+    # Fallback: use zipball_url when no assets are attached
+    zipball_url = release_data.get("zipball_url")
+    if not zipball_url:
+        raise RuntimeError(
+            "No .zip release asset found and zipball_url is missing. Attach a zip asset "
+            "to the GitHub release or provide --local-template to init."
+        )
+    
     return {
-        "url": release_data.get("zipball_url"),
+        "url": zipball_url,
         "name": f"{GITHUB_REPO_NAME}-{release_data.get('tag_name', 'latest')}.zip",
         "size": 0,
         "source": "zipball",
@@ -340,9 +351,10 @@ def download_release_archive(
             with httpx.Client(timeout=RETRY_CONFIG["timeout"], follow_redirects=True) as client:
                 with client.stream("GET", download_url, headers=_github_auth_headers(github_token)) as response:
                     if response.status_code != 200:
+                        body_snippet = response.text[:400] if debug else ""
                         error_msg = _format_rate_limit_error(response.status_code, response.headers, download_url)
-                        if debug:
-                            error_msg += f"\n\nResponse body (truncated 400):\n{response.text[:400]}"
+                        if body_snippet:
+                            error_msg += f"\n\nResponse body (truncated 400):\n{body_snippet}"
                         raise RuntimeError(error_msg)
 
                     downloaded = 0
@@ -368,6 +380,16 @@ def download_release_archive(
         "release": release_data.get("tag_name", "unknown"),
         "source": asset.get("source", "unknown"),
     }
+    
+    # Validate that we actually downloaded a zip archive (GitHub may return HTML on errors)
+    if not temp_file.exists() or temp_file.stat().st_size == 0:
+        raise RuntimeError(f"Downloaded file missing or empty: {temp_file}")
+    if not zipfile.is_zipfile(temp_file):
+        raise RuntimeError(
+            f"Downloaded file is not a valid zip archive: {temp_file}\n"
+            "The download may have been an HTML error page (rate limit or auth issue)."
+        )
+    
     return metadata
 
 
@@ -385,6 +407,9 @@ def extract_template(zip_path: Path, target_dir: Path, tracker: Optional[StepTra
     temp_extract_dir = target_dir / ".apidog-temp"
     
     try:
+        if not zipfile.is_zipfile(zip_path):
+            raise Exception(f"Template download is not a valid zip file: {zip_path}")
+        
         # Extract to temporary directory
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(temp_extract_dir)
@@ -446,11 +471,50 @@ def extract_template(zip_path: Path, target_dir: Path, tracker: Optional[StepTra
             return temp_extract_dir  # Return None since already cleaned up
             
         else:
+            # Fallback: try to locate scripts/templates/commands anywhere in archive
+            def find_dir(name: str) -> Optional[Path]:
+                candidates = [p for p in temp_extract_dir.rglob(name) if p.is_dir()]
+                if not candidates:
+                    return None
+                # Prefer the shallowest match to avoid node_modules or nested copies
+                candidates.sort(key=lambda p: len(p.parts))
+                return candidates[0]
+            
+            fallback_scripts = find_dir("scripts")
+            fallback_templates = find_dir("templates")
+            fallback_commands = find_dir("commands")
+            
+            if any([fallback_scripts, fallback_templates, fallback_commands]):
+                apidog_dir.mkdir(parents=True, exist_ok=True)
+                
+                if fallback_scripts and fallback_scripts.exists():
+                    dest = apidog_dir / "scripts"
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(fallback_scripts, dest)
+                
+                if fallback_templates and fallback_templates.exists():
+                    dest = apidog_dir / "templates"
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(fallback_templates, dest)
+                
+                if fallback_commands and fallback_commands.exists():
+                    dest = apidog_dir / "commands"
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(fallback_commands, dest)
+                
+                if not keep_zip and zip_path.exists():
+                    zip_path.unlink()
+                return temp_extract_dir
+            
             # Clean up on error
             if temp_extract_dir.exists():
                 shutil.rmtree(temp_extract_dir)
             if not keep_zip and zip_path.exists():
                 zip_path.unlink()
+            
             raise Exception("Archive does not contain expected structure (scripts/, templates/, commands/ or .apidog/)")
     
     except Exception as e:
@@ -479,11 +543,19 @@ def prompt_ai_agent_selection() -> str:
         for agent_key, config in AGENT_CONFIG.items()
     }
     
+    # Fallback for non-interactive environments
+    if not sys.stdin.isatty():
+        console.print("[yellow]No TTY detected; defaulting to 'none' for AI agent setup.[/yellow]")
+        return "none"
+    
     try:
         selected = select_with_arrows(options, "Which AI agent would you like to set up?")
         return selected
     except (KeyboardInterrupt, typer.Exit):
         console.print("\n[yellow]AI agent selection cancelled - skipping AI setup[/yellow]")
+        return "none"
+    except Exception as exc:
+        console.print(f"\n[yellow]AI agent selection failed ({exc}); defaulting to 'none'.[/yellow]")
         return "none"
 
 
@@ -984,7 +1056,7 @@ def init(
 6. Run: node .apidog/scripts/merge_test_cases.js to merge test cases to .apidog/collections/output/apidog.json
 7. Import apidog.json to Apidog to test scenario
 
-[Tip] Make sure Node.js is installed to use the scripts in .apidog/scripts/.
+Tip: Make sure Node.js is installed to use the scripts in .apidog/scripts/.
 """
             console.print(Panel(help_text, title="Apidog Test Usage", border_style="cyan"))
             # ...existing code...
@@ -1051,13 +1123,13 @@ def handle_init_error(target_dir: Path, error: Exception) -> None:
         apidog_dir = target_dir / ".apidog"
         if apidog_dir.exists():
             shutil.rmtree(apidog_dir)
-    panel = Panel(
-        f"[red]Initialization failed: {error}[/red]\n\n"
-        f"Any partial files have been removed. Please try again or report the issue.",
-        title="Error",
-        border_style="red"
-    )
-    console.print(panel)
+    safe_error = str(error)
+    message = Text()
+    message.append("Initialization failed: ", style="red")
+    message.append(safe_error)
+    message.append("\n\nAny partial files have been removed. Please try again or report the issue.")
+    panel = Panel(message, title="Error", border_style="red")
+    console.print(panel, markup=False)
 
 
 def main():
