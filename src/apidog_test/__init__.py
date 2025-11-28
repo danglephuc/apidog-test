@@ -22,13 +22,15 @@ from urllib.parse import urljoin
 import httpx
 import typer
 from platformdirs import user_cache_dir
-from readchar import readkey, key
+import readchar
 from rich.console import Console
-from rich.live import Live
 from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.text import Text
+from rich.live import Live
+from rich.align import Align
 from rich.table import Table
 from rich.tree import Tree
-from rich.text import Text
 from rich.markup import escape
 
 __version__ = "1.0.0"
@@ -87,111 +89,184 @@ GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO
 # ============================================================================
 
 class StepTracker:
-    """Track and visualize progress for multi-step operations (T006)."""
-    
-    def __init__(self, title: str = "Progress"):
+    """Track and render hierarchical steps without emojis, similar to Claude Code tree output.
+    Supports live auto-refresh via an attached refresh callback.
+    """
+    def __init__(self, title: str):
         self.title = title
-        self.steps: List[Dict[str, Any]] = []
-        self.refresh_callback: Optional[callable] = None
-    
-    def add(self, name: str, status: str = "pending") -> int:
-        """Add a new step and return its index."""
-        self.steps.append({"name": name, "status": status})
-        return len(self.steps) - 1
-    
-    def start(self, index: int):
-        """Mark a step as in progress."""
-        self.steps[index]["status"] = "running"
-        if self.refresh_callback:
-            self.refresh_callback()
-    
-    def complete(self, index: int):
-        """Mark a step as completed."""
-        self.steps[index]["status"] = "complete"
-        if self.refresh_callback:
-            self.refresh_callback()
-    
-    def error(self, index: int, message: str = ""):
-        """Mark a step as errored."""
-        self.steps[index]["status"] = "error"
-        if message:
-            self.steps[index]["error"] = message
-        if self.refresh_callback:
-            self.refresh_callback()
-    
-    def skip(self, index: int):
-        """Mark a step as skipped."""
-        self.steps[index]["status"] = "skipped"
-        if self.refresh_callback:
-            self.refresh_callback()
-    
-    def render(self) -> Tree:
-        """Render the progress tree with status symbols."""
-        tree = Tree(f"[bold]{self.title}[/bold]")
-        
-        status_symbols = {
-            "pending": "⏸ ",
-            "running": "▶ ",
-            "complete": "✓",
-            "error": "✗",
-            "skipped": "○",
-        }
-        
-        status_colors = {
-            "pending": "dim",
-            "running": "cyan",
-            "complete": "green",
-            "error": "red",
-            "skipped": "yellow",
-        }
-        
+        self.steps = []  # list of dicts: {key, label, status, detail}
+        self.status_order = {"pending": 0, "running": 1, "done": 2, "error": 3, "skipped": 4}
+        self._refresh_cb = None  # callable to trigger UI refresh
+
+    def attach_refresh(self, cb):
+        self._refresh_cb = cb
+
+    def add(self, key: str, label: str):
+        if key not in [s["key"] for s in self.steps]:
+            self.steps.append({"key": key, "label": label, "status": "pending", "detail": ""})
+            self._maybe_refresh()
+
+    def start(self, key: str, detail: str = ""):
+        self._update(key, status="running", detail=detail)
+
+    def complete(self, key: str, detail: str = ""):
+        self._update(key, status="done", detail=detail)
+
+    def error(self, key: str, detail: str = ""):
+        self._update(key, status="error", detail=detail)
+
+    def skip(self, key: str, detail: str = ""):
+        self._update(key, status="skipped", detail=detail)
+
+    def _update(self, key: str, status: str, detail: str):
+        for s in self.steps:
+            if s["key"] == key:
+                s["status"] = status
+                if detail:
+                    s["detail"] = detail
+                self._maybe_refresh()
+                return
+
+        self.steps.append({"key": key, "label": key, "status": status, "detail": detail})
+        self._maybe_refresh()
+
+    def _maybe_refresh(self):
+        if self._refresh_cb:
+            try:
+                self._refresh_cb()
+            except Exception:
+                pass
+
+    def render(self):
+        tree = Tree(f"[cyan]{self.title}[/cyan]", guide_style="grey50")
         for step in self.steps:
+            label = step["label"]
+            detail_text = step["detail"].strip() if step["detail"] else ""
+
             status = step["status"]
-            symbol = status_symbols.get(status, "?")
-            color = status_colors.get(status, "white")
-            name = step["name"]
-            
-            if status == "error" and "error" in step:
-                tree.add(f"[{color}]{symbol} {name}: {step['error']}[/{color}]")
+            if status == "done":
+                symbol = "[green]●[/green]"
+            elif status == "pending":
+                symbol = "[green dim]○[/green dim]"
+            elif status == "running":
+                symbol = "[cyan]○[/cyan]"
+            elif status == "error":
+                symbol = "[red]●[/red]"
+            elif status == "skipped":
+                symbol = "[yellow]○[/yellow]"
             else:
-                tree.add(f"[{color}]{symbol} {name}[/{color}]")
-        
+                symbol = " "
+
+            if status == "pending":
+                # Entire line light gray (pending)
+                if detail_text:
+                    line = f"{symbol} [bright_black]{label} ({detail_text})[/bright_black]"
+                else:
+                    line = f"{symbol} [bright_black]{label}[/bright_black]"
+            else:
+                # Label white, detail (if any) light gray in parentheses
+                if detail_text:
+                    line = f"{symbol} [white]{label}[/white] [bright_black]({detail_text})[/bright_black]"
+                else:
+                    line = f"{symbol} [white]{label}[/white]"
+
+            tree.add(line)
         return tree
 
+def get_key():
+    """Get a single keypress in a cross-platform way using readchar."""
+    key = readchar.readkey()
 
-def select_with_arrows(options: Dict[str, str], prompt: str = "Select an option:") -> str:
-    """Interactive arrow-key selection (T007)."""
-    keys = list(options.keys())
-    selected_index = 0
+    if key == readchar.key.UP or key == readchar.key.CTRL_P:
+        return 'up'
+    if key == readchar.key.DOWN or key == readchar.key.CTRL_N:
+        return 'down'
+
+    if key == readchar.key.ENTER:
+        return 'enter'
+
+    if key == readchar.key.ESC:
+        return 'escape'
+
+    if key == readchar.key.CTRL_C:
+        raise KeyboardInterrupt
+
+    return key
+
+def select_with_arrows(options: dict, prompt_text: str = "Select an option", default_key: str = None) -> str:
+    """
+    Interactive selection using arrow keys with Rich Live display.
     
-    def render_options():
-        """Render the selection menu."""
-        lines = [f"[bold]{prompt}[/bold]\n"]
-        for i, key in enumerate(keys):
-            arrow = "▶ " if i == selected_index else "  "
-            style = "cyan bold" if i == selected_index else ""
-            lines.append(f"{arrow}[{style}]{options[key]}[/{style}]")
-        lines.append("\n[dim]Use ↑/↓ arrows to navigate, Enter to select, ESC to cancel[/dim]")
-        return "\n".join(lines)
-    
-    with Live(render_options(), console=console, refresh_per_second=4) as live:
-        while True:
-            char = readkey()
-            
-            if char == key.UP:
-                selected_index = (selected_index - 1) % len(keys)
-                live.update(render_options())
-            elif char == key.DOWN:
-                selected_index = (selected_index + 1) % len(keys)
-                live.update(render_options())
-            elif char == key.ENTER:
-                console.print()  # Add newline after selection
-                return keys[selected_index]
-            elif char == key.ESC or char == '\x03':  # ESC or Ctrl+C
-                console.print("\n[yellow]Selection cancelled[/yellow]")
-                raise typer.Exit(1)
-            
-            live.update(render_options())
+    Args:
+        options: Dict with keys as option keys and values as descriptions
+        prompt_text: Text to show above the options
+        default_key: Default option key to start with
+        
+    Returns:
+        Selected option key
+    """
+    option_keys = list(options.keys())
+    if default_key and default_key in option_keys:
+        selected_index = option_keys.index(default_key)
+    else:
+        selected_index = 0
+
+    selected_key = None
+
+    def create_selection_panel():
+        """Create the selection panel with current selection highlighted."""
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="cyan", justify="left", width=3)
+        table.add_column(style="white", justify="left")
+
+        for i, key in enumerate(option_keys):
+            if i == selected_index:
+                table.add_row("▶", f"[cyan]{key}[/cyan] [dim]({options[key]})[/dim]")
+            else:
+                table.add_row(" ", f"[cyan]{key}[/cyan] [dim]({options[key]})[/dim]")
+
+        table.add_row("", "")
+        table.add_row("", "[dim]Use ↑/↓ to navigate, Enter to select, Esc to cancel[/dim]")
+
+        return Panel(
+            table,
+            title=f"[bold]{prompt_text}[/bold]",
+            border_style="cyan",
+            padding=(1, 2)
+        )
+
+    console.print()
+
+    def run_selection_loop():
+        nonlocal selected_key, selected_index
+        with Live(create_selection_panel(), console=console, transient=True, auto_refresh=False) as live:
+            while True:
+                try:
+                    key = get_key()
+                    if key == 'up':
+                        selected_index = (selected_index - 1) % len(option_keys)
+                    elif key == 'down':
+                        selected_index = (selected_index + 1) % len(option_keys)
+                    elif key == 'enter':
+                        selected_key = option_keys[selected_index]
+                        break
+                    elif key == 'escape':
+                        console.print("\n[yellow]Selection cancelled[/yellow]")
+                        raise typer.Exit(1)
+
+                    live.update(create_selection_panel(), refresh=True)
+
+                except KeyboardInterrupt:
+                    console.print("\n[yellow]Selection cancelled[/yellow]")
+                    raise typer.Exit(1)
+
+    run_selection_loop()
+
+    if selected_key is None:
+        console.print("\n[red]Selection failed.[/red]")
+        raise typer.Exit(1)
+
+    return selected_key
 
 
 def generate_checksum(file_path: Path) -> str:
@@ -633,27 +708,27 @@ def check(verbose: bool = typer.Option(False, "--verbose", help="Show detailed i
     tracker = StepTracker("Installation Status")
     
     # Check .apidog folder
-    step_folder = tracker.add("Check .apidog folder")
-    tracker.start(step_folder)
+    tracker.add("check-folder", "Check .apidog folder")
+    tracker.start("check-folder")
     if apidog_dir.exists():
-        tracker.complete(step_folder)
+        tracker.complete("check-folder", "Found")
     else:
-        tracker.error(step_folder, "Not found")
+        tracker.error("check-folder", "Not found")
     
     # Check AI agents
-    step_cursor = tracker.add("Check Cursor integration")
-    tracker.start(step_cursor)
+    tracker.add("check-cursor", "Check Cursor integration")
+    tracker.start("check-cursor")
     if (cwd / ".cursor/commands").exists():
-        tracker.complete(step_cursor)
+        tracker.complete("check-cursor", "Found")
     else:
-        tracker.skip(step_cursor)
+        tracker.skip("check-cursor")
     
-    step_copilot = tracker.add("Check GitHub Copilot integration")
-    tracker.start(step_copilot)
+    tracker.add("check-copilot", "Check GitHub Copilot integration")
+    tracker.start("check-copilot")
     if (cwd / ".github/agents").exists():
-        tracker.complete(step_copilot)
+        tracker.complete("check-copilot", "Found")
     else:
-        tracker.skip(step_copilot)
+        tracker.skip("check-copilot")
     
     tracker.show()
     
@@ -983,51 +1058,51 @@ def init(
         tracker = StepTracker("Initializing Apidog Test Infrastructure")
         
         # Add all steps
-        step_fetch = tracker.add("Fetching latest release from GitHub")
-        step_download = tracker.add("Downloading templates")
-        step_extract = tracker.add("Extracting templates")
-        step_ai = tracker.add("Setting up AI agent integration")
+        tracker.add("fetch-release", "Fetching latest release from GitHub")
+        tracker.add("download-templates", "Downloading templates")
+        tracker.add("extract-templates", "Extracting templates")
+        tracker.add("setup-ai-agent", "Setting up AI agent integration")
         # Perform initialization
-        with Live(tracker.render(), console=console, refresh_per_second=4) as live:
-            tracker.refresh_callback = live.refresh
+        with Live(tracker.render(), console=console, refresh_per_second=4, transient=True) as live:
+            tracker.attach_refresh(lambda: live.update(tracker.render()))
             
             # Check if using local template for testing
             if local_template:
                 # Skip fetch and download, use local file
-                tracker.start(step_fetch)
-                tracker.skip(step_fetch)
-                tracker.start(step_download)
-                tracker.skip(step_download)
+                tracker.start("fetch-release")
+                tracker.skip("fetch-release")
+                tracker.start("download-templates")
+                tracker.skip("download-templates")
                 temp_zip = Path(local_template)
                 if not temp_zip.exists():
                     raise Exception(f"Local template file not found: {local_template}")
                 release_data = {"tag_name": "local-test", "name": "Local Template"}
             else:
                 # T012: Fetch latest release
-                tracker.start(step_fetch)
+                tracker.start("fetch-release")
                 release_data = fetch_latest_release(github_token=github_token)
-                tracker.complete(step_fetch)
+                tracker.complete("fetch-release", "done")
                 
                 # T013: Download templates
-                tracker.start(step_download)
+                tracker.start("download-templates")
                 download_meta = download_release_archive(
                     release_data,
                     tracker=tracker,
                     github_token=github_token,
                 )
                 temp_zip = download_meta["path"]
-                tracker.complete(step_download)
+                tracker.complete("download-templates", "done")
             
             # T014: Extract templates
-            tracker.start(step_extract)
+            tracker.start("extract-templates")
             extract_dir = extract_template(temp_zip, target_dir, tracker, keep_zip=bool(local_template))
-            tracker.complete(step_extract)
+            tracker.complete("extract-templates", "done")
             
             # T015-T016: AI agent setup
-            tracker.start(step_ai)
+            tracker.start("setup-ai-agent")
             selected_agent = ai if ai else prompt_ai_agent_selection()
             create_ai_agent_folders(target_dir, selected_agent, extract_dir, tracker)
-            tracker.complete(step_ai)
+            tracker.complete("setup-ai-agent", "done")
             
             # Clean up temporary extraction directory (for root format)
             if extract_dir and extract_dir.exists() and extract_dir.name == ".apidog-temp":
